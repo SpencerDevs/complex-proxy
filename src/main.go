@@ -195,9 +195,9 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Raw query string: %s\n", r.URL.RawQuery)
 	}
 
-	targetURL := r.URL.Query().Get("url")
+	targetURL := r.URL.Query().Get("destination")
 	if Debug {
-		fmt.Printf("Retrieved 'url' parameter (decoded): %s\n", targetURL)
+		fmt.Printf("Retrieved 'destination' parameter (decoded): %s\n", targetURL)
 	}
 	headersJSON := r.URL.Query().Get("headers")
 	useNormalParam := r.URL.Query().Has("normal")
