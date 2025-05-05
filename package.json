@@ -1,0 +1,18 @@
+{
+  "name": "i6-shark",
+  "version": "2.2.0",
+  "description": "IPv6 proxy for web scraping and testing",
+  "main": "src/main.go",
+  "scripts": {
+    "build": "go build -o bin/i6shark src/main.go",
+    "start": "go run src/main.go",
+    "dev": "if command -v air > /dev/null; then air -c .air.toml; else nodemon --exec 'go run src/main.go' --signal SIGTERM; fi",
+    "postinstall": "go mod tidy && go install github.com/cosmtrek/air@latest",
+    "setup-deps": "go get -u github.com/joho/godotenv github.com/andybalholm/brotli github.com/vishvananda/netlink"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "author": "",
+  "license": "ISC"
+} 
