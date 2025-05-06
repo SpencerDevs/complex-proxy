@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -257,6 +258,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Process custom headers from the JSON parameter
 	if headersJSON != "" {
 		var customHeaders map[string]string
 		err := json.Unmarshal([]byte(headersJSON), &customHeaders)
@@ -265,7 +267,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 				headers.Set(name, value)
 			}
 			if Debug {
-				fmt.Printf("Applied custom headers: %v\n", customHeaders)
+				fmt.Printf("Applied custom headers from JSON parameter: %v\n", customHeaders)
 			}
 		} else {
 			fmt.Println("Warning: Failed to parse 'headers' JSON. Ignoring.")
@@ -572,6 +574,397 @@ func onStartup() bool {
 	return true
 }
 
+func handleM3U8Proxy(w http.ResponseWriter, r *http.Request) {
+	apiToken := r.Header.Get("API-Token")
+	userAgent := r.Header.Get("User-Agent")
+
+	if !validateAPIToken(apiToken, userAgent) {
+		http.Error(w, "Unauthorized: i6.shark detected invalid API-Token.", http.StatusUnauthorized)
+		return
+	}
+
+	logRequest(r)
+
+	if Debug {
+		fmt.Printf("Raw query string: %s\n", r.URL.RawQuery)
+	}
+
+	// Get the target URL from the 'url' parameter
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		http.Error(w, "Missing 'url' parameter for m3u8 proxy.", http.StatusBadRequest)
+		return
+	}
+
+	// Parse custom headers if provided
+	headersJSON := r.URL.Query().Get("headers")
+	var customHeaders map[string]string
+	if headersJSON != "" {
+		err := json.Unmarshal([]byte(headersJSON), &customHeaders)
+		if err != nil {
+			fmt.Println("Warning: Failed to parse 'headers' JSON. Ignoring.")
+		} else if Debug {
+			fmt.Printf("Parsed custom headers for m3u8 proxy: %v\n", customHeaders)
+		}
+	}
+
+	// Get an IPv6 from the pool for the outgoing request
+	sourceIP, poolErr := getNextIPFromPool()
+	useSpecificIP := true
+	var sourceNetIP net.IP
+
+	if poolErr != nil {
+		fmt.Printf("Warning: IP Pool empty or error, falling back to system default IP. Error: %v\n", poolErr)
+		sourceIP = "System default (fallback)"
+		useSpecificIP = false
+	} else {
+		sourceNetIP = net.ParseIP(sourceIP)
+		if sourceNetIP == nil {
+			fmt.Printf("ERROR: Failed to parse IP from pool: %s. Falling back.\n", sourceIP)
+			sourceIP = "System default (fallback)"
+			useSpecificIP = false
+		} else {
+			fmt.Printf("Using IP from pool for m3u8 proxy: %s\n", sourceIP)
+		}
+	}
+
+	// Create request for the m3u8 content
+	targetURL = ensureURLHasScheme(targetURL)
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error creating request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Apply custom headers
+	for name, value := range customHeaders {
+		req.Header.Set(name, value)
+	}
+
+	// Copy relevant headers from the original request
+	for name, values := range r.Header {
+		if name != "Host" && name != "API-Token" {
+			for _, value := range values {
+				req.Header.Add(name, value)
+			}
+		}
+	}
+
+	// Setup client with specific source IP or default
+	var client *http.Client
+	if useSpecificIP {
+		specificTransport := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				LocalAddr: &net.TCPAddr{IP: sourceNetIP, Port: 0},
+				Timeout:   RequestTimeout,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   5,
+			IdleConnTimeout:       60 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+		client = &http.Client{
+			Transport: specificTransport,
+			Timeout:   RequestTimeout,
+		}
+	} else {
+		client = defaultClient
+	}
+
+	// Fetch the m3u8 content
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("ERROR using source IP %s for m3u8 %s: %v\n", sourceIP, targetURL, err)
+		http.Error(w, fmt.Sprintf("Error fetching m3u8 content: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, fmt.Sprintf("Upstream server returned status: %d", resp.StatusCode), resp.StatusCode)
+		return
+	}
+
+	// Read the m3u8 content
+	content, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error reading m3u8 content: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Parse the URL to use as base for relative URLs
+	parsedURL, err := url.Parse(targetURL)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error parsing target URL: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Build the base URL for the proxy server
+	proxyBaseURL := fmt.Sprintf("http://%s", r.Host)
+	headersParam := ""
+	if headersJSON != "" {
+		headersParam = "&headers=" + url.QueryEscape(headersJSON)
+	}
+
+	// Process the m3u8 content
+	contentStr := string(content)
+	lines := strings.Split(contentStr, "\n")
+	newLines := make([]string, 0, len(lines))
+	
+	// Check if this is a master playlist (contains RESOLUTION or BANDWIDTH)
+	isMaster := strings.Contains(contentStr, "RESOLUTION=") || strings.Contains(contentStr, "BANDWIDTH=")
+	
+	var currentDirective string
+	
+	for i, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+		if trimmedLine == "" {
+			// Preserve empty lines
+			newLines = append(newLines, "")
+			continue
+		}
+
+		if strings.HasPrefix(trimmedLine, "#") {
+			// Handle directives
+			if strings.HasPrefix(trimmedLine, "#EXT-X-STREAM-INF:") || 
+			   strings.HasPrefix(trimmedLine, "#EXT-X-MEDIA:") ||
+			   strings.HasPrefix(trimmedLine, "#EXTINF:") {
+				currentDirective = trimmedLine
+			}
+			
+			if strings.HasPrefix(trimmedLine, "#EXT-X-KEY:") {
+				// Replace the URL in key directives
+				newLine := replaceURLInDirective(trimmedLine, parsedURL, proxyBaseURL, "/ts-proxy?url=", headersJSON)
+				newLines = append(newLines, newLine)
+			} else if strings.HasPrefix(trimmedLine, "#EXT-X-MEDIA:") {
+				// Replace the URL in media directives
+				newLine := replaceURLInDirective(trimmedLine, parsedURL, proxyBaseURL, "/m3u8-proxy?url=", headersJSON)
+				newLines = append(newLines, newLine)
+			} else {
+				// Keep other directives unchanged
+				newLines = append(newLines, trimmedLine)
+			}
+		} else {
+			// Handle content lines (segment URLs)
+			segmentURL, err := resolveURL(parsedURL, trimmedLine)
+			if err != nil {
+				fmt.Printf("Warning: Could not resolve segment URL %s: %v\n", trimmedLine, err)
+				newLines = append(newLines, trimmedLine)
+				continue
+			}
+
+			var proxyEndpoint string
+			// Determine if this segment is another playlist or a media segment
+			if isMaster || strings.HasSuffix(strings.ToLower(trimmedLine), ".m3u8") {
+				proxyEndpoint = "/m3u8-proxy?url="
+			} else {
+				proxyEndpoint = "/ts-proxy?url="
+			}
+			
+			newURL := fmt.Sprintf("%s%s%s%s", proxyBaseURL, proxyEndpoint, url.QueryEscape(segmentURL), headersParam)
+			newLines = append(newLines, newURL)
+			
+			// Reset current directive
+			currentDirective = ""
+		}
+	}
+
+	// Set appropriate headers
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	
+	// Send the modified content
+	w.Write([]byte(strings.Join(newLines, "\n")))
+}
+
+func handleTSProxy(w http.ResponseWriter, r *http.Request) {
+	apiToken := r.Header.Get("API-Token")
+	userAgent := r.Header.Get("User-Agent")
+
+	if !validateAPIToken(apiToken, userAgent) {
+		http.Error(w, "Unauthorized: i6.shark detected invalid API-Token.", http.StatusUnauthorized)
+		return
+	}
+
+	logRequest(r)
+
+	// Get the target URL from the 'url' parameter
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		http.Error(w, "Missing 'url' parameter for TS proxy.", http.StatusBadRequest)
+		return
+	}
+
+	// Parse custom headers if provided
+	headersJSON := r.URL.Query().Get("headers")
+	var customHeaders map[string]string
+	if headersJSON != "" {
+		err := json.Unmarshal([]byte(headersJSON), &customHeaders)
+		if err != nil {
+			fmt.Println("Warning: Failed to parse 'headers' JSON. Ignoring.")
+		} else if Debug {
+			fmt.Printf("Parsed custom headers for TS proxy: %v\n", customHeaders)
+		}
+	}
+
+	// Get an IPv6 from the pool for the outgoing request
+	sourceIP, poolErr := getNextIPFromPool()
+	useSpecificIP := true
+	var sourceNetIP net.IP
+
+	if poolErr != nil {
+		fmt.Printf("Warning: IP Pool empty or error, falling back to system default IP. Error: %v\n", poolErr)
+		sourceIP = "System default (fallback)"
+		useSpecificIP = false
+	} else {
+		sourceNetIP = net.ParseIP(sourceIP)
+		if sourceNetIP == nil {
+			fmt.Printf("ERROR: Failed to parse IP from pool: %s. Falling back.\n", sourceIP)
+			sourceIP = "System default (fallback)"
+			useSpecificIP = false
+		} else {
+			fmt.Printf("Using IP from pool for TS proxy: %s\n", sourceIP)
+		}
+	}
+
+	// Create request for the TS content
+	targetURL = ensureURLHasScheme(targetURL)
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error creating request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Apply custom headers
+	for name, value := range customHeaders {
+		req.Header.Set(name, value)
+	}
+
+	// Copy relevant headers from the original request
+	for name, values := range r.Header {
+		if name != "Host" && name != "API-Token" {
+			for _, value := range values {
+				req.Header.Add(name, value)
+			}
+		}
+	}
+
+	// Setup client with specific source IP or default
+	var client *http.Client
+	if useSpecificIP {
+		specificTransport := &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				LocalAddr: &net.TCPAddr{IP: sourceNetIP, Port: 0},
+				Timeout:   RequestTimeout,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          10,
+			MaxIdleConnsPerHost:   5,
+			IdleConnTimeout:       60 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+		client = &http.Client{
+			Transport: specificTransport,
+			Timeout:   RequestTimeout,
+		}
+	} else {
+		client = defaultClient
+	}
+
+	fmt.Printf("TS proxy connecting to %s using source IP %s...\n", targetURL, sourceIP)
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("ERROR using source IP %s for TS %s: %v\n", sourceIP, targetURL, err)
+		http.Error(w, fmt.Sprintf("Error fetching TS content: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, fmt.Sprintf("Upstream server returned status: %d", resp.StatusCode), resp.StatusCode)
+		return
+	}
+
+	// Set appropriate CORS headers
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	
+	// Set content type for TS files
+	w.Header().Set("Content-Type", "video/mp2t")
+	
+	// Copy any useful headers from the response
+	for name, values := range resp.Header {
+		if !skipHeaders[strings.ToLower(name)] {
+			for _, value := range values {
+				w.Header().Add(name, value)
+			}
+		}
+	}
+	
+	// Stream the response body to the client
+	w.WriteHeader(resp.StatusCode)
+	_, err = io.Copy(w, resp.Body)
+	if err != nil {
+		fmt.Printf("Error streaming TS content: %v\n", err)
+	}
+}
+
+// Helper function to replace URLs in directives like EXT-X-KEY or EXT-X-MEDIA
+func replaceURLInDirective(directive string, baseURL *url.URL, proxyBaseURL, proxyEndpoint, headersJSON string) string {
+	// Find any URL in the directive
+	urlRegex := regexp.MustCompile(`URI="([^"]+)"`)
+	matches := urlRegex.FindStringSubmatch(directive)
+	
+	if len(matches) < 2 {
+		return directive
+	}
+
+	// Resolve the URL if it's relative
+	originalURL := matches[1]
+	resolvedURL, err := resolveURL(baseURL, originalURL)
+	if err != nil {
+		fmt.Printf("Warning: Could not resolve URL in directive %s: %v\n", directive, err)
+		return directive
+	}
+
+	// Create the proxied URL
+	headersParam := ""
+	if headersJSON != "" {
+		headersParam = "&headers=" + url.QueryEscape(headersJSON)
+	}
+	
+	proxiedURL := fmt.Sprintf("%s%s%s%s", proxyBaseURL, proxyEndpoint, url.QueryEscape(resolvedURL), headersParam)
+	
+	// Replace the URL in the directive
+	return strings.Replace(directive, fmt.Sprintf(`URI="%s"`, originalURL), fmt.Sprintf(`URI="%s"`, proxiedURL), 1)
+}
+
+// Helper function to resolve a URL that might be relative
+func resolveURL(baseURL *url.URL, urlStr string) (string, error) {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return "", err
+	}
+	
+	// If the URL is already absolute, return it
+	if parsedURL.IsAbs() {
+		return urlStr, nil
+	}
+	
+	// Otherwise, resolve it against the base URL
+	return baseURL.ResolveReference(parsedURL).String(), nil
+}
+
 func main() {
 	random = rand.New(rand.NewSource(time.Now().UnixNano()))
 	ipPool = make([]string, 0, DesiredPoolSize)
@@ -601,6 +994,8 @@ func main() {
 
 	go manageIPPool()
 	http.HandleFunc("/", handleRequest)
+	http.HandleFunc("/m3u8-proxy", handleM3U8Proxy)
+	http.HandleFunc("/ts-proxy", handleTSProxy)
 
 	listenAddr := fmt.Sprintf("%s:%d", ListenHost, ListenPort)
 	fmt.Printf("Starting i6.shark server on %s\n", listenAddr)
