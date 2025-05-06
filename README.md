@@ -1,137 +1,60 @@
-# i6.shark - IPv6 Proxy Server
+# i6.shark
 
-A configurable IPv6 proxy server for web scraping and testing.
+An IPv6 proxy server that allows you to make HTTP requests from randomly generated IPv6 addresses in a /48 subnet. This project basically built the best proxy on earth, a /48 subnet has `1,208,925,819,614,629,174,706,176` (1.2 × 10²⁴) IPv6 addresses, which if you can't tell is a lot. Using a single subnet means those who really want to block you can block your ASN address, so be careful with that. This project is designed to be used for educational purposes only, and should not be used for any illegal activities (totally).
 
 ## Features
 
-- Dynamically manages IPv6 addresses to rotate through different IPs
-- Supports HTTP/HTTPS requests with full request/response handling
-- Handles Brotli and Gzip compression
-- Configurable via environment variables
-- Easy setup with pnpm scripts or Docker
+- Generates random IPv6 addresses based on your IPv6 prefix
+- API key authentication for secure usage
+- Full HTTP method support (GET, POST, PUT, DELETE, etc.)
 
 ## Requirements
 
-### For direct installation:
-- Go 1.21+
-- Node.js and pnpm (for development scripts)
-- Linux-based environment with IPv6 support
-- Root privileges for binding to low ports and managing IPv6 addresses
-
-### For Docker:
-- Docker and Docker Compose
-- Linux host with IPv6 connectivity
-
-## Setup
-
-### Option 1: Direct Installation
-
-1. Clone the repository
-2. Install dependencies:
-
-```bash
-pnpm install
-```
-
-This will attempt to install Air (Go hot-reloading tool) and set up all Go dependencies.
-
-3. Configure your environment by editing the `.env` file
-
-### Option 2: Docker
-
-1. Clone the repository
-2. Configure your environment by editing the `.env` file
-3. Build and run with Docker Compose:
-
-```bash
-docker-compose up -d
-```
-
-## Running
-
-### Development mode
-
-Option 1 - using the dev script:
-```bash
-pnpm run dev
-```
-
-This will use Air for hot-reloading if available, or fall back to nodemon.
-
-Option 2 - using the shell script (if Air can't be installed):
-```bash
-./dev.sh
-```
-
-### Production
-
-#### Direct installation:
-```bash
-pnpm run build
-sudo ./bin/i6shark
-```
-
-Or run directly:
-```bash
-sudo pnpm run start
-```
-
-#### Docker:
-```bash
-# Build and run with Docker Compose
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop the service
-docker-compose down
-```
+- Go 1.20 or higher
+- Linux/Unix system with IPv6 support
+- Root privileges (for port 80 binding and IPv6 manipulation)
 
 ## Configuration
 
-All configuration is through environment variables. See `.env` file for all available options.
+Edit the constants at the top of the `main.go` file:
 
-Key settings:
-
-- `SHARED_SECRET`: API security token
-- `IPV6_PREFIX`: Your IPv6 /48 prefix
-- `IPV6_SUBNET`: Subnet within your /48
-- `INTERFACE`: Network interface to use
-- `LISTEN_PORT`: Server port (default 80)
-- `DESIRED_POOL_SIZE`: Target number of IPv6 addresses to maintain
-
-## API Usage
-
-Make requests to the proxy with:
-
-```
-http://localhost/destination=https://target-site.com&headers={"custom-header":"value"}
-```
-
-Include the API-Token header calculated as:
-```
-HMAC-SHA256(User-Agent, SHARED_SECRET)
+```go
+const (
+	SharedSecret       = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // Secret between client & server
+	Version            = "2.2"                              // Version of the script
+	IPv6Prefix         = "xxxx:xxxx:xxxx"                   // Your /48 prefix
+	IPv6Subnet         = "1000"                             // Using subnet 1000 within your /48
+	Interface          = "ens3"                             // Detected interface from your system
+	ListenPort         = 80                                 // Proxy server port
+	ListenHost         = "0.0.0.0"                          // Listen on all interfaces
+	RequestTimeout     = 30 * time.Second                   // Request timeout in seconds
+	Debug              = false                              // Enable debug output
+	DesiredPoolSize    = 100                                // Target number of IPs in the pool
+	PoolManageInterval = 5 * time.Second                    // Check/add less frequently (every 5 seconds)
+	PoolAddBatchSize   = 5                                  // Try to add up to 5 IPs per cycle if needed
+)
 ```
 
-## Troubleshooting
+## Usage
 
-### Air installation issues
-If you encounter issues installing Air, you can:
+1. Build the application:
+```
+go build -o i6shark
+```
 
-1. Install it manually: `go install github.com/cosmtrek/air@latest`
-2. Make sure your Go bin directory is in your PATH
-3. Use the `./dev.sh` script as a fallback
+2. Run with root privileges:
+```
+sudo ./i6shark
+```
 
-### Go not found
-If you see "go: command not found", make sure Go is installed and in your PATH.
+3. Send requests through the proxy:
+```
+curl "http://localhost/?url=https://example.com" -H "API-Token: VALID_API_TOKEN"
+```
 
-### Docker networking issues
-If you encounter problems with Docker networking:
-- Ensure the host has IPv6 connectivity
-- Make sure the Docker daemon is configured for IPv6
-- Check that the interface name in `.env` matches the container's interface
+> **Python Version:**  
+> You may also use the python version though, *it is not recommended* as it is not as slower and not up to date.
 
-## License
+## API Authentication
 
-ISC
+API tokens are generated using HMAC-SHA256 and a secret key the input for the key generation is the user-agent header. See the `validateAPIToken` function for implementation details.

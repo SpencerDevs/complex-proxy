@@ -15,100 +15,29 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"compress/gzip"
+	"compress/gzip" // <-- ADD THIS LINE if it's missing
 	"github.com/andybalholm/brotli"
-	"github.com/joho/godotenv"
 	"github.com/vishvananda/netlink"
 )
 
-// Config holds all configuration settings loaded from environment variables
-type Config struct {
-	SharedSecret       string
-	Version            string
-	IPv6Prefix         string
-	IPv6Subnet         string
-	Interface          string
-	ListenPort         int
-	ListenHost         string
-	RequestTimeout     time.Duration
-	Debug              bool
-	DesiredPoolSize    int
-	PoolManageInterval time.Duration
-	PoolAddBatchSize   int
-}
-
-// Global configuration
-var cfg Config
-
-// Initialize configuration from environment variables with defaults
-func loadConfig() Config {
-	// Load .env file if it exists
-	godotenv.Load()
-
-	config := Config{
-		SharedSecret:       getEnv("SHARED_SECRET", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
-		Version:            getEnv("VERSION", "2.2"),
-		IPv6Prefix:         getEnv("IPV6_PREFIX", "2a01:e5c0:2d74"),
-		IPv6Subnet:         getEnv("IPV6_SUBNET", "5000"),
-		Interface:          getEnv("INTERFACE", "ens3"),
-		ListenHost:         getEnv("LISTEN_HOST", "0.0.0.0"),
-		RequestTimeout:     time.Duration(getEnvInt("REQUEST_TIMEOUT", 30)) * time.Second,
-		Debug:              getEnvBool("DEBUG", false),
-		DesiredPoolSize:    getEnvInt("DESIRED_POOL_SIZE", 1000),
-		PoolManageInterval: time.Duration(getEnvInt("POOL_MANAGE_INTERVAL", 5)) * time.Second,
-		PoolAddBatchSize:   getEnvInt("POOL_ADD_BATCH_SIZE", 15),
-	}
-
-	// Parse port with special handling for potential errors
-	port, err := strconv.Atoi(getEnv("LISTEN_PORT", "80"))
-	if err != nil {
-		fmt.Printf("Invalid LISTEN_PORT, using default 80: %v\n", err)
-		port = 80
-	}
-	config.ListenPort = port
-
-	return config
-}
-
-// Helper functions for env variable parsing
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.Atoi(valueStr)
-	if err != nil {
-		fmt.Printf("Error parsing %s as integer, using default %d: %v\n", key, defaultValue, err)
-		return defaultValue
-	}
-	return value
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	valueStr := os.Getenv(key)
-	if valueStr == "" {
-		return defaultValue
-	}
-	value, err := strconv.ParseBool(valueStr)
-	if err != nil {
-		fmt.Printf("Error parsing %s as boolean, using default %v: %v\n", key, defaultValue, err)
-		return defaultValue
-	}
-	return value
-}
+const (
+	SharedSecret       = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // Secret between client & server
+	Version            = "2.2"                              // Version of the script
+	IPv6Prefix         = "2a01:e5c0:2d74"                   // Your /48 prefix
+	IPv6Subnet         = "5000"                             // Using subnet 1000 within your /48
+	Interface          = "ens3"                             // Detected interface from your system
+	ListenPort         = 80                                 // Proxy server port
+	ListenHost         = "0.0.0.0"                          // Listen on all interfaces
+	RequestTimeout     = 30 * time.Second                   // Request timeout in seconds
+	Debug              = false                              // Enable debug output
+	DesiredPoolSize    = 1000                                // Target number of IPs in the pool (Reduced for testing)
+	PoolManageInterval = 5 * time.Second                    // Check/add less frequently (every 5 seconds)
+	PoolAddBatchSize   = 15                                 // Try to add up to 5 IPs per cycle if needed
+)
 
 var random *rand.Rand
 var requestCount int
@@ -141,8 +70,8 @@ func randomIPv6() string {
 	hostPart2 := rand.Uint32()
 
 	return fmt.Sprintf("%s:%s:%04x:%04x:%04x:%04x",
-		cfg.IPv6Prefix,
-		cfg.IPv6Subnet,
+		IPv6Prefix,
+		IPv6Subnet,
 		(hostPart1>>16)&0xFFFF,
 		hostPart1&0xFFFF,
 		(hostPart2>>16)&0xFFFF,
@@ -150,12 +79,12 @@ func randomIPv6() string {
 }
 
 func checkInterface() bool {
-	link, err := netlink.LinkByName(cfg.Interface)
+	link, err := netlink.LinkByName(Interface)
 	if err != nil {
 		if _, ok := err.(netlink.LinkNotFoundError); ok {
-			fmt.Printf("WARNING: Interface %s not found.\n", cfg.Interface)
+			fmt.Printf("WARNING: Interface %s not found.\n", Interface)
 		} else {
-			fmt.Printf("Error checking interface %s: %v\n", cfg.Interface, err)
+			fmt.Printf("Error checking interface %s: %v\n", Interface, err)
 		}
 		links, listErr := netlink.LinkList()
 		if listErr == nil {
@@ -167,16 +96,16 @@ func checkInterface() bool {
 		return false
 	}
 	if (link.Attrs().Flags & net.FlagUp) == 0 {
-		fmt.Printf("WARNING: Interface %s is down.\n", cfg.Interface)
+		fmt.Printf("WARNING: Interface %s is down.\n", Interface)
 	}
-	fmt.Printf("Interface %s found and appears up.\n", cfg.Interface)
+	fmt.Printf("Interface %s found and appears up.\n", Interface)
 	return true
 }
 
 func addIPv6ToInterface(ipv6 string) bool {
-	link, err := netlink.LinkByName(cfg.Interface)
+	link, err := netlink.LinkByName(Interface)
 	if err != nil {
-		fmt.Printf("addIPv6: Failed to find link %s: %v\n", cfg.Interface, err)
+		fmt.Printf("addIPv6: Failed to find link %s: %v\n", Interface, err)
 		return false
 	}
 
@@ -189,26 +118,26 @@ func addIPv6ToInterface(ipv6 string) bool {
 	err = netlink.AddrAdd(link, addr)
 	if err != nil {
 		if err.Error() == "file exists" {
-			if cfg.Debug {
-				fmt.Printf("addIPv6: Address %s already exists on %s (ignored).\n", ipv6, cfg.Interface)
+			if Debug {
+				fmt.Printf("addIPv6: Address %s already exists on %s (ignored).\n", ipv6, Interface)
 			}
 			return true
 		} else {
-			fmt.Printf("addIPv6: Failed to add address %s to %s: %v\n", ipv6, cfg.Interface, err)
+			fmt.Printf("addIPv6: Failed to add address %s to %s: %v\n", ipv6, Interface, err)
 			return false
 		}
 	}
 
-	if cfg.Debug {
-		fmt.Printf("addIPv6: Successfully added %s to %s via netlink.\n", ipv6, cfg.Interface)
+	if Debug {
+		fmt.Printf("addIPv6: Successfully added %s to %s via netlink.\n", ipv6, Interface)
 	}
 	return true
 }
 
 func removeIPv6FromInterface(ipv6 string) bool {
-	link, err := netlink.LinkByName(cfg.Interface)
+	link, err := netlink.LinkByName(Interface)
 	if err != nil {
-		fmt.Printf("removeIPv6: Failed to find link %s: %v\n", cfg.Interface, err)
+		fmt.Printf("removeIPv6: Failed to find link %s: %v\n", Interface, err)
 		return false
 	}
 
@@ -220,12 +149,12 @@ func removeIPv6FromInterface(ipv6 string) bool {
 
 	err = netlink.AddrDel(link, addr)
 	if err != nil {
-		fmt.Printf("removeIPv6: error removing address %s from %s: %v\n", ipv6, cfg.Interface, err)
+		fmt.Printf("removeIPv6: error removing address %s from %s: %v\n", ipv6, Interface, err)
 		return false
 	}
 
-	if cfg.Debug {
-		fmt.Printf("removeIPv6: Successfully removed %s from %s via netlink.\n", ipv6, cfg.Interface)
+	if Debug {
+		fmt.Printf("removeIPv6: Successfully removed %s from %s via netlink.\n", ipv6, Interface)
 	}
 	return true
 }
@@ -245,7 +174,7 @@ func logRequest(r *http.Request) {
 func validateAPIToken(apiToken string, userAgent string) bool {
 	key := []byte(userAgent)
 	h := hmac.New(sha256.New, key)
-	h.Write([]byte(cfg.SharedSecret))
+	h.Write([]byte(SharedSecret))
 	expectedHash := hex.EncodeToString(h.Sum(nil))
 
 	return hmac.Equal([]byte(apiToken), []byte(expectedHash))
@@ -262,25 +191,25 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	logRequest(r)
 
-	if cfg.Debug {
+	if Debug {
 		fmt.Printf("Raw query string: %s\n", r.URL.RawQuery)
 	}
 
 	targetURL := r.URL.Query().Get("destination")
-	if cfg.Debug {
+	if Debug {
 		fmt.Printf("Retrieved 'destination' parameter (decoded): %s\n", targetURL)
 	}
 	headersJSON := r.URL.Query().Get("headers")
 	useNormalParam := r.URL.Query().Has("normal")
 
 	if targetURL == "" {
-		fmt.Fprintf(w, "i6.shark is working as expected (v%s). IP check skipped.", cfg.Version)
+		fmt.Fprintf(w, "i6.shark is working as expected (v%s). IP check skipped.", Version)
 		return
 	}
 
 	targetURL = ensureURLHasScheme(targetURL)
 	parsedURL, err := url.Parse(targetURL)
-	if cfg.Debug {
+	if Debug {
 		if err != nil {
 			fmt.Printf("Error parsing decoded URL '%s': %v\n", targetURL, err)
 		} else {
@@ -335,7 +264,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 			for name, value := range customHeaders {
 				headers.Set(name, value)
 			}
-			if cfg.Debug {
+			if Debug {
 				fmt.Printf("Applied custom headers: %v\n", customHeaders)
 			}
 		} else {
@@ -350,7 +279,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
 				LocalAddr: &net.TCPAddr{IP: sourceNetIP, Port: 0},
-				Timeout:   cfg.RequestTimeout,
+				Timeout:   RequestTimeout,
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 			ForceAttemptHTTP2:     true,
@@ -362,7 +291,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		client = &http.Client{
 			Transport: specificTransport,
-			Timeout:   cfg.RequestTimeout,
+			Timeout:   RequestTimeout,
 		}
 		fmt.Printf("Using specific transport/client with LocalAddr: %s\n", sourceIP)
 	} else {
@@ -410,16 +339,16 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 		if useSpecificIP {
 			fmt.Println("Attempting to get interface addresses via netlink during error...")
-			link, linkErr := netlink.LinkByName(cfg.Interface)
+			link, linkErr := netlink.LinkByName(Interface)
 			if linkErr != nil {
-				fmt.Printf("  Error getting link %s: %v\n", cfg.Interface, linkErr)
+				fmt.Printf("  Error getting link %s: %v\n", Interface, linkErr)
 			} else {
 				addrs, addrErr := netlink.AddrList(link, netlink.FAMILY_V6)
 				if addrErr != nil {
-					fmt.Printf("  Error listing addresses for %s: %v\n", cfg.Interface, addrErr)
+					fmt.Printf("  Error listing addresses for %s: %v\n", Interface, addrErr)
 				} else {
 					foundInNetlink := false
-					fmt.Printf("  Current IPv6 addresses on %s at time of error:\n", cfg.Interface)
+					fmt.Printf("  Current IPv6 addresses on %s at time of error:\n", Interface)
 					for _, addr := range addrs {
 						fmt.Printf("    - %s (Flags: %d)\n", addr.IPNet.String(), addr.Flags)
 						if addr.IP.Equal(sourceNetIP) {
@@ -434,7 +363,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 			if opError, ok := err.(*net.OpError); ok {
 				if sysErr, ok := opError.Err.(*os.SyscallError); ok && (sysErr.Err.Error() == "invalid argument" || sysErr.Err.Error() == "can't assign requested address" || strings.Contains(sysErr.Err.Error(), "no suitable address found")) {
-					fmt.Printf("Network Error likely due to unusable source IP %s on interface %s.\n", sourceIP, cfg.Interface)
+					fmt.Printf("Network Error likely due to unusable source IP %s on interface %s.\n", sourceIP, Interface)
 
 					poolMutex.Lock()
 					for i, ip := range ipPool {
@@ -478,7 +407,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		reader = brotli.NewReader(resp.Body)
 		w.Header().Del("Content-Encoding")
 		w.Header().Del("Content-Length")
-		if cfg.Debug {
+		if Debug {
 			fmt.Println("Decompressing Brotli response stream")
 		}
 	} else if strings.Contains(contentEncoding, "gzip") {
@@ -490,13 +419,13 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 			defer gzipReader.Close()
 			w.Header().Del("Content-Encoding")
 			w.Header().Del("Content-Length")
-			if cfg.Debug {
+			if Debug {
 				fmt.Println("Decompressing Gzip response stream")
 			}
 		}
 	}
 
-	if cfg.Debug {
+	if Debug {
 		fmt.Println("Response headers being sent to client:")
 		for name, values := range w.Header() {
 			for _, value := range values {
@@ -513,7 +442,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		// Can't send HTTP error anymore as headers/status are already sent.
 		fmt.Printf("Error streaming response body to client: %v\n", err)
 	} else {
-		if cfg.Debug {
+		if Debug {
 			fmt.Printf("Successfully streamed %d bytes to client.\n", copiedBytes)
 		}
 	}
@@ -543,15 +472,15 @@ func getNextIPFromPool() (string, error) {
 
 func manageIPPool() {
 	fmt.Println("Starting IP pool manager...")
-	ticker := time.NewTicker(cfg.PoolManageInterval)
+	ticker := time.NewTicker(PoolManageInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
 		poolMutex.Lock()
 		currentSize := len(ipPool)
-		needToAdd := currentSize < cfg.DesiredPoolSize
-		batchTarget := minInt(cfg.PoolAddBatchSize, cfg.DesiredPoolSize-currentSize)
-		shouldReplace := currentSize >= cfg.DesiredPoolSize
+		needToAdd := currentSize < DesiredPoolSize
+		batchTarget := minInt(PoolAddBatchSize, DesiredPoolSize-currentSize)
+		shouldReplace := currentSize >= DesiredPoolSize
 		var ipsToRemove []string
 
 		if shouldReplace {
@@ -621,7 +550,7 @@ func manageIPPool() {
 }
 
 func checkPrivileges() bool {
-	if os.Geteuid() != 0 && cfg.ListenPort < 1024 {
+	if os.Geteuid() != 0 && ListenPort < 1024 {
 		fmt.Println("ERROR: This program requires root privileges to bind to port 80 and add IPv6 addresses. Run with sudo or change ListenPort to a value above 1024.")
 		return false
 	}
@@ -644,17 +573,14 @@ func onStartup() bool {
 }
 
 func main() {
-	// Load configuration from environment variables
-	cfg = loadConfig()
-
 	random = rand.New(rand.NewSource(time.Now().UnixNano()))
-	ipPool = make([]string, 0, cfg.DesiredPoolSize)
+	ipPool = make([]string, 0, DesiredPoolSize)
 	currentIPIndex = 0
 
 	defaultTransport = &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
-			Timeout:   cfg.RequestTimeout,
+			Timeout:   RequestTimeout,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
 		ForceAttemptHTTP2:     true,
@@ -666,7 +592,7 @@ func main() {
 	}
 	defaultClient = &http.Client{
 		Transport: defaultTransport,
-		Timeout:   cfg.RequestTimeout,
+		Timeout:   RequestTimeout,
 	}
 
 	if !onStartup() {
@@ -676,7 +602,7 @@ func main() {
 	go manageIPPool()
 	http.HandleFunc("/", handleRequest)
 
-	listenAddr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.ListenPort)
+	listenAddr := fmt.Sprintf("%s:%d", ListenHost, ListenPort)
 	fmt.Printf("Starting i6.shark server on %s\n", listenAddr)
 	err := http.ListenAndServe(listenAddr, nil)
 	if err != nil {
