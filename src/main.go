@@ -725,9 +725,7 @@ func handleM3U8Proxy(w http.ResponseWriter, r *http.Request) {
 	// Check if this is a master playlist (contains RESOLUTION or BANDWIDTH)
 	isMaster := strings.Contains(contentStr, "RESOLUTION=") || strings.Contains(contentStr, "BANDWIDTH=")
 	
-	var currentDirective string
-	
-	for i, line := range lines {
+	for _, line := range lines {
 		trimmedLine := strings.TrimSpace(line)
 		if trimmedLine == "" {
 			// Preserve empty lines
@@ -740,7 +738,7 @@ func handleM3U8Proxy(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(trimmedLine, "#EXT-X-STREAM-INF:") || 
 			   strings.HasPrefix(trimmedLine, "#EXT-X-MEDIA:") ||
 			   strings.HasPrefix(trimmedLine, "#EXTINF:") {
-				currentDirective = trimmedLine
+				// Previous code stored this in currentDirective but never used it
 			}
 			
 			if strings.HasPrefix(trimmedLine, "#EXT-X-KEY:") {
@@ -774,9 +772,6 @@ func handleM3U8Proxy(w http.ResponseWriter, r *http.Request) {
 			
 			newURL := fmt.Sprintf("%s%s%s%s", proxyBaseURL, proxyEndpoint, url.QueryEscape(segmentURL), headersParam)
 			newLines = append(newLines, newURL)
-			
-			// Reset current directive
-			currentDirective = ""
 		}
 	}
 
