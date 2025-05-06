@@ -27,6 +27,8 @@ const (
 	Interface          = "ens3"                             // Detected interface from your system
 	ListenPort         = 80                                 // Proxy server port
 	ListenHost         = "0.0.0.0"                          // Listen on all interfaces
+	PublicURL          = ""                                 // Public URL for proxy endpoints (empty to use request host)
+	RequireAuth        = true                               // Set to false to disable API token authentication
 	RequestTimeout     = 30 * time.Second                   // Request timeout in seconds
 	Debug              = false                              // Enable debug output
 	DesiredPoolSize    = 100                                // Target number of IPs in the pool
@@ -49,11 +51,37 @@ sudo ./i6shark
 
 3. Send requests through the proxy:
 ```
-curl "http://localhost/?url=https://example.com" -H "API-Token: VALID_API_TOKEN"
+# For general proxy requests
+curl "http://localhost/?destination=https://example.com" -H "API-Token: VALID_API_TOKEN"
+
+# For m3u8/ts proxy requests
+curl "http://localhost/m3u8-proxy?url=https://example.com/playlist.m3u8" -H "API-Token: VALID_API_TOKEN"
+curl "http://localhost/ts-proxy?url=https://example.com/segment.ts" -H "API-Token: VALID_API_TOKEN"
+
+# Without authentication (if RequireAuth is set to false)
+curl "http://localhost/?destination=https://example.com"
 ```
 
-> **Python Version:**  
-> You may also use the python version though, *it is not recommended* as it is not as slower and not up to date.
+4. To include custom headers in the proxy request, add a URL-encoded JSON object as the `headers` parameter:
+```
+# Adding Referer and Origin headers to an m3u8 proxy request
+curl "http://localhost/m3u8-proxy?url=https://example.com/playlist.m3u8&headers=%7B%22referer%22%3A%22https%3A%2F%2Fexample.org%2F%22%2C%22origin%22%3A%22https%3A%2F%2Fexample.org%22%7D" -H "API-Token: VALID_API_TOKEN"
+```
+
+The URL-decoded headers parameter in the example above would be:
+```json
+{"referer":"https://example.org/","origin":"https://example.org"}
+```
+
+5. If you're running behind a domain name, set the `PublicURL` constant to your full URL:
+```go
+PublicURL = "https://proxy.example.com" // Use your actual domain if you are behind a reverse proxy
+```
+
+6. To disable API token authentication, set the `RequireAuth` constant to false:
+```go
+RequireAuth = false // Allow all requests without API-Token
+```
 
 ## API Authentication
 

@@ -33,6 +33,8 @@ const (
 	Interface          = "ens3"                             // Detected interface from your system
 	ListenPort         = 80                                 // Proxy server port
 	ListenHost         = "0.0.0.0"                          // Listen on all interfaces
+	PublicURL          = ""                                 // Public URL for proxy endpoints (empty to use request host)
+	RequireAuth        = true                               // Set to false to disable API token authentication
 	RequestTimeout     = 30 * time.Second                   // Request timeout in seconds
 	Debug              = false                              // Enable debug output
 	DesiredPoolSize    = 1000                                // Target number of IPs in the pool (Reduced for testing)
@@ -185,7 +187,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	apiToken := r.Header.Get("API-Token")
 	userAgent := r.Header.Get("User-Agent")
 
-	if !validateAPIToken(apiToken, userAgent) {
+	if RequireAuth && !validateAPIToken(apiToken, userAgent) {
 		http.Error(w, "Unauthorized: i6.shark detected invalid API-Token.", http.StatusUnauthorized)
 		return
 	}
@@ -578,7 +580,7 @@ func handleM3U8Proxy(w http.ResponseWriter, r *http.Request) {
 	apiToken := r.Header.Get("API-Token")
 	userAgent := r.Header.Get("User-Agent")
 
-	if !validateAPIToken(apiToken, userAgent) {
+	if RequireAuth && !validateAPIToken(apiToken, userAgent) {
 		http.Error(w, "Unauthorized: i6.shark detected invalid API-Token.", http.StatusUnauthorized)
 		return
 	}
@@ -704,7 +706,12 @@ func handleM3U8Proxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the base URL for the proxy server
-	proxyBaseURL := fmt.Sprintf("http://%s", r.Host)
+	proxyBaseURL := ""
+	if PublicURL != "" {
+		proxyBaseURL = PublicURL
+	} else {
+		proxyBaseURL = fmt.Sprintf("http://%s", r.Host)
+	}
 	headersParam := ""
 	if headersJSON != "" {
 		headersParam = "&headers=" + url.QueryEscape(headersJSON)
@@ -787,7 +794,7 @@ func handleTSProxy(w http.ResponseWriter, r *http.Request) {
 	apiToken := r.Header.Get("API-Token")
 	userAgent := r.Header.Get("User-Agent")
 
-	if !validateAPIToken(apiToken, userAgent) {
+	if RequireAuth && !validateAPIToken(apiToken, userAgent) {
 		http.Error(w, "Unauthorized: i6.shark detected invalid API-Token.", http.StatusUnauthorized)
 		return
 	}
