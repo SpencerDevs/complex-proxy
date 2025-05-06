@@ -16,31 +16,99 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"compress/gzip" // <-- ADD THIS LINE if it's missing
+	"compress/gzip"
 	"github.com/andybalholm/brotli"
 	"github.com/vishvananda/netlink"
 )
 
-const (
-	SharedSecret       = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // Secret between client & server
-	Version            = "2.2"                              // Version of the script
-	IPv6Prefix         = "2a01:e5c0:2d74"                   // Your /48 prefix
-	IPv6Subnet         = "5000"                             // Using subnet 1000 within your /48
-	Interface          = "ens3"                             // Detected interface from your system
-	ListenPort         = 80                                 // Proxy server port
-	ListenHost         = "0.0.0.0"                          // Listen on all interfaces
-	PublicURL          = ""                                 // Public URL for proxy endpoints (empty to use request host)
-	RequireAuth        = true                               // Set to false to disable API token authentication
-	RequestTimeout     = 30 * time.Second                   // Request timeout in seconds
-	Debug              = false                              // Enable debug output
-	DesiredPoolSize    = 1000                                // Target number of IPs in the pool (Reduced for testing)
-	PoolManageInterval = 5 * time.Second                    // Check/add less frequently (every 5 seconds)
-	PoolAddBatchSize   = 15                                 // Try to add up to 5 IPs per cycle if needed
+var (
+	SharedSecret       string
+	Version            string
+	IPv6Prefix         string
+	IPv6Subnet         string
+	Interface          string
+	ListenPort         int
+	ListenHost         string
+	PublicURL          string
+	RequireAuth        bool
+	RequestTimeout     time.Duration
+	Debug              bool
+	DesiredPoolSize    int
+	PoolManageInterval time.Duration
+	PoolAddBatchSize   int
 )
+
+func loadConfig() {
+	// Define defaults
+	SharedSecret = getEnv("SHARED_SECRET", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+	Version = getEnv("VERSION", "2.2")
+	IPv6Prefix = getEnv("IPV6_PREFIX", "2a01:e5c0:2d74")
+	IPv6Subnet = getEnv("IPV6_SUBNET", "5000")
+	Interface = getEnv("INTERFACE", "ens3")
+	
+	// Parse numeric values
+	ListenPort = getEnvInt("LISTEN_PORT", 80)
+	ListenHost = getEnv("LISTEN_HOST", "0.0.0.0")
+	PublicURL = getEnv("PUBLIC_URL", "")
+	RequireAuth = getEnvBool("REQUIRE_AUTH", true)
+	RequestTimeout = time.Duration(getEnvInt("REQUEST_TIMEOUT", 30)) * time.Second
+	Debug = getEnvBool("DEBUG", false)
+	DesiredPoolSize = getEnvInt("DESIRED_POOL_SIZE", 1000)
+	PoolManageInterval = time.Duration(getEnvInt("POOL_MANAGE_INTERVAL", 5)) * time.Second
+	PoolAddBatchSize = getEnvInt("POOL_ADD_BATCH_SIZE", 15)
+
+	// Log the configuration
+	fmt.Println("Configuration loaded:")
+	fmt.Printf("- IPv6Prefix: %s\n", IPv6Prefix)
+	fmt.Printf("- IPv6Subnet: %s\n", IPv6Subnet)
+	fmt.Printf("- Interface: %s\n", Interface)
+	fmt.Printf("- ListenPort: %d\n", ListenPort)
+	fmt.Printf("- RequireAuth: %v\n", RequireAuth)
+	fmt.Printf("- Debug: %v\n", Debug)
+	fmt.Printf("- DesiredPoolSize: %d\n", DesiredPoolSize)
+}
+
+// Helper functions to get environment variables with defaults
+func getEnv(key, defaultValue string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	
+	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		fmt.Printf("Warning: Could not parse %s as integer, using default %d\n", key, defaultValue)
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	
+	value, err := strconv.ParseBool(valueStr)
+	if err != nil {
+		fmt.Printf("Warning: Could not parse %s as boolean, using default %v\n", key, defaultValue)
+		return defaultValue
+	}
+	return value
+}
 
 var random *rand.Rand
 var requestCount int
@@ -973,6 +1041,9 @@ func resolveURL(baseURL *url.URL, urlStr string) (string, error) {
 }
 
 func main() {
+	// Load configuration from environment variables
+	loadConfig()
+
 	random = rand.New(rand.NewSource(time.Now().UnixNano()))
 	ipPool = make([]string, 0, DesiredPoolSize)
 	currentIPIndex = 0

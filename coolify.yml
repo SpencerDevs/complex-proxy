@@ -1,0 +1,26 @@
+version: "3.0"
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+    environment:
+      SHARED_SECRET: ${SHARED_SECRET:-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+      VERSION: ${VERSION:-2.2}
+      IPV6_PREFIX: ${IPV6_PREFIX:-2a01:e5c0:2d74}
+      IPV6_SUBNET: ${IPV6_SUBNET:-5000}
+      INTERFACE: ${INTERFACE:-eth0}
+      LISTEN_PORT: ${LISTEN_PORT:-80}
+      LISTEN_HOST: ${LISTEN_HOST:-0.0.0.0}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
+      REQUEST_TIMEOUT: ${REQUEST_TIMEOUT:-30}
+      DEBUG: ${DEBUG:-false}
+      DESIRED_POOL_SIZE: ${DESIRED_POOL_SIZE:-1000}
+      POOL_MANAGE_INTERVAL: ${POOL_MANAGE_INTERVAL:-5}
+      POOL_ADD_BATCH_SIZE: ${POOL_ADD_BATCH_SIZE:-15}
+    cap_add:
+      - NET_ADMIN  # Required for adding IPv6 addresses 
