@@ -28,13 +28,13 @@ import (
 const (
 	SharedSecret       = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" // Secret between client & server
 	Version            = "2.2"                              // Version of the script
-	IPv6Prefix         = "2a01:e5c0:2d74"                   // Your /48 prefix
+	IPv6Prefix         = ""                   // Your /48 prefix
 	IPv6Subnet         = "5000"                             // Using subnet 1000 within your /48
-	Interface          = "ens3"                             // Detected interface from your system
+	Interface          = "eth0"                             // Detected interface from your system
 	ListenPort         = 80                                 // Proxy server port
 	ListenHost         = "0.0.0.0"                          // Listen on all interfaces
 	PublicURL          = ""                                 // Public URL for proxy endpoints (empty to use request host)
-	RequireAuth        = true                               // Set to false to disable API token authentication
+	RequireAuth        = false                               // Set to false to disable API token authentication
 	RequestTimeout     = 30 * time.Second                   // Request timeout in seconds
 	Debug              = false                              // Enable debug output
 	DesiredPoolSize    = 1000                                // Target number of IPs in the pool (Reduced for testing)

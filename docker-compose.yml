@@ -1,0 +1,11 @@
+version: '3.9'
+
+services:
+  i6shark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: i6shark
+    ports:
+      - "80:80"
+    restart: unless-stopped
