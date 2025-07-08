@@ -9,5 +9,5 @@ services:
     ports:
       - "80:80"
     restart: unless-stopped
-    cap_add:
-      - NET_ADMIN
+    network_mode: host
+    privileged: true
